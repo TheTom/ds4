@@ -9717,8 +9717,18 @@ static uint64_t metal_graph_kv_cache_bytes_for_context(uint32_t ctx_size, uint32
         const uint32_t ratio = ds4_layer_compress_ratio(il);
         if (ratio == 0) continue;
         const uint64_t comp_cap = (uint64_t)(ctx_size / ratio + 2u);
-        bytes += comp_cap * DS4_N_HEAD_DIM *
-                 (DS4_GPU_ATTN_COMP_CACHE_F16 ? sizeof(uint16_t) : sizeof(float));
+        /* Account for the active comp_cache row layout.  Under
+         * `--comp-cache turbo3` the pool stores packed turbo3 bytes
+         * (~200 B/row at head_dim=512), not floats.  Reporting the
+         * float size here overstates the budget by ~10x and can
+         * prematurely trip the 8 GiB `ds4_gpu_should_use_managed_kv_cache`
+         * gate, forcing managed (demand-paged) allocations at contexts
+         * where regular device memory would suffice. */
+        const uint64_t comp_row_bytes = (g_ds4_comp_dtype == DS4_KV_TURBO3)
+                ? ds4_comp_row_bytes(DS4_N_HEAD_DIM, DS4_KV_TURBO3)
+                : (uint64_t)DS4_N_HEAD_DIM *
+                  (DS4_GPU_ATTN_COMP_CACHE_F16 ? sizeof(uint16_t) : sizeof(float));
+        bytes += comp_cap * comp_row_bytes;
         if (ratio == 4) {
             bytes += comp_cap * DS4_N_INDEXER_HEAD_DIM * sizeof(float);
         }
