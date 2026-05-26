@@ -11351,13 +11351,23 @@ static bool metal_graph_encode_decode_layer(
                         raw_cache, dequant_scratch,
                         raw_cap, DS4_N_HEAD_DIM, DS4_N_ROT);
                 if (!raw_cache_attn) ok = false;
+                /* The fp8 attention kernel reads comp_kv with a float row
+                 * layout.  When --comp-cache turbo3 is paired with the
+                 * inline-dequant path, the cached comp_cache pointer may
+                 * already reference the packed byte pool, which would be
+                 * misinterpreted as floats and corrupt attention output.
+                 * Route through the dequant-to-scratch helper to guarantee
+                 * a float comp_kv view for this fallback. */
+                ds4_gpu_tensor *comp_kv_float = n_comp
+                        ? metal_graph_comp_kv_for_attn(g, il, n_comp)
+                        : NULL;
                 if (ok) ok = ds4_gpu_attention_decode_heads_tensor(g->heads,
                                                                      model->map, model->size,
                                                                      layer->attn_sinks->abs_offset,
                                                                      g->q, raw_cache_attn, n_raw,
                                                                      raw_cap,
                                                                      raw_start,
-                                                                     n_comp ? comp_cache : NULL,
+                                                                     comp_kv_float,
                                                                      metal_graph_attn_comp_cache_is_f16(),
                                                                      n_comp,
                                                                      NULL,
